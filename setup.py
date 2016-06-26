@@ -11,7 +11,7 @@ setup(
     author_email='jon@donowsolutions.com',
     description='Illuminate Education API wrapper',
     license='MIT',
-    packages=['deanslist'],
+    packages=['illuminate'],
     install_requires=[
         'requests >=2.10.0, <3',
         'rauth >=0.7.2',
