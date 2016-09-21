@@ -116,16 +116,20 @@ class Illuminate(object):
                     page = response_json['page']
                     kwargs['page'] = page + 1
                     return results + self._get(relative_url, *args, **kwargs)
+            elif 'export_version' and 'assessment' in response_json:
+                return response_json['assessment']
             else:
                 raise ValueError('Unexpected response format from Illuminate: %s', response_json)
 
     def __getattr__(self, name):
-        if name.startswith('get_'):
+        if name.startswith('get_') and name != 'get_assessment':
             target = name.partition('_')[-1]
             return lambda *args, **kwargs: self._get(snake_to_pascal(target), *args, **kwargs)
         else:
             return self.__getattribute__(name)
 
+    def get_assessment(self, assessment_id):
+        return self._get('Assessment/%s/View' % assessment_id)
 
 
 def snake_to_pascal(string):
