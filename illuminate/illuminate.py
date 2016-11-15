@@ -1,10 +1,12 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import json
+from concurrent.futures import as_completed
 import requests
 from requests.compat import urljoin
 from requests.exceptions import RequestException
-from rauth import OAuth1Session
+from requests_oauthlib import OAuth1
+from requests_futures.sessions import FuturesSession
 try:
     from exceptions import ConnectionError
 except ImportError:
@@ -17,26 +19,28 @@ logger = logging.getLogger(__name__)
 
 # API details
 ILLUMINATE_URL_TEMPLATE = 'https://{}.illuminateed.com/{}/rest_server.php/Api/'
+MAX_LIMIT = 200
+
 
 class Illuminate(object):
     """A client for a specific Illuminate instance
 
     """
 
-    def __init__(self, subdomain, instance, consumer_key, consumer_secret, access_token, access_token_secret, user_agent=None):
+    def __init__(self, subdomain, instance, consumer_key, consumer_secret, access_token, access_token_secret, max_workers=10, user_agent=None):
         """
 
 
         """
         self.base_url = ILLUMINATE_URL_TEMPLATE.format(subdomain, instance)
-        self.session = self._establish_session(consumer_key, consumer_secret, access_token, access_token_secret, user_agent=user_agent)
+        self.session = self._establish_session(consumer_key, consumer_secret, access_token, access_token_secret, max_workers=max_workers, user_agent=user_agent)
 
         self.sites = self.get_sites()
         self.district = self._determine_district()
 
         logger.debug('Illuminate client initialized for %s!', self.district)
 
-    def _establish_session(self, consumer_key, consumer_secret, access_token, access_token_secret, user_agent):
+    def _establish_session(self, consumer_key, consumer_secret, access_token, access_token_secret, max_workers, user_agent):
         """
 
         """
@@ -45,12 +49,12 @@ class Illuminate(object):
         if user_agent:
             headers['User-Agent'] = user_agent
 
-        session = OAuth1Session(
-            consumer_key=consumer_key,
-            consumer_secret=consumer_secret,
-            access_token=access_token,
-            access_token_secret=access_token_secret,
-        )
+        oauth1 = OAuth1(client_key=consumer_key,
+                        client_secret=consumer_secret,
+                        resource_owner_key=access_token,
+                        resource_owner_secret=access_token_secret)
+        session = FuturesSession(max_workers=max_workers)
+        session.auth = oauth1
         session.headers.update(headers)
         logger.debug('Oauth1 session initialized.')
 
@@ -70,16 +74,24 @@ class Illuminate(object):
 
 
     def _get(self, relative_url, *args, **kwargs):
-        """Issue base GET request to PS API."""
+        """Issue base GET request to Illuminate API."""
 
         for arg in args:
             relative_url += '/{}'.format(arg)
 
+        params = kwargs
+
+        if 'limit' not in params:
+            params['limit'] = MAX_LIMIT
+
+        if 'page' in params:
+            raise ValueError('Cannot currently accept requests for specific pages.')
+
         url = urljoin(self.base_url, relative_url)
-        logger.debug('Hitting url: %s with params: %s', url, kwargs)
+        logger.debug('Hitting url: %s with params: %s', url, params)
 
         try:
-            response = self.session.get(url, header_auth=True, params=kwargs)
+            response = self.session.get(url, params=params).result()
         except requests.ConnectionError:
             raise ConnectionError('Unable to connect to %s - are you sure the subdomain is correct?' % self.base_url)
 
@@ -92,7 +104,6 @@ class Illuminate(object):
                 raise ConnectionError('No such resource %s - are you sure the endpoints were configured correctly?' % relative_url)
             else:
                 raise(e)
-
         try:
             response_json = response.json()
         except ValueError:
@@ -108,14 +119,22 @@ class Illuminate(object):
                 page = response_json['page']
                 num_results = response_json['num_results']
                 results = response_json['results']
-                assert page == 1 or page == kwargs['page']
-                if num_pages <= 1 or page == num_pages:
+                assert page == 1
+                if num_pages <= 1:  # Can be 0...
                     logger.debug('Returning %d results.', num_results)
                     return results
                 else:
-                    page = response_json['page']
-                    kwargs['page'] = page + 1
-                    return results + self._get(relative_url, *args, **kwargs)
+                    logger.debug('Got %d results from page 1.', len(results))
+                    futures = [self.session.get(url, params=dict(params, page=p)) for p in range(2, num_pages + 1)]
+                    for f in as_completed(futures):
+                        f_response = f.result()
+                        f_response_json = f_response.json()
+                        f_results = f_response_json['results']
+                        logger.debug('Got %d results from page %d.', len(f_results), f_response_json['page'])
+                        results += f_results
+                    logger.debug('Returning %d results.', len(results))
+                    return results
+
             elif 'export_version' and 'assessment' in response_json:
                 return response_json['assessment']
             else:

@@ -1,7 +1,7 @@
 from setuptools import setup
 
 __name__ = 'illuminate'
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 setup(
     name=__name__,
@@ -13,8 +13,8 @@ setup(
     license='MIT',
     packages=['illuminate'],
     install_requires=[
-        'requests >=2.11.0, <3',
-        'rauth >=0.7.2',
+        'requests-futures >=0.9.7',
+        'requests-oauthlib >= 0.7.0'
     ],
     keywords=['illuminate', 'api', 'wrapper'],
     classifiers=[
